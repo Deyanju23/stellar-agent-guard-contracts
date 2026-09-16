@@ -74,21 +74,9 @@ non-custodial, no proxy wrappers, tested end-to-end on testnet.
 
 ## Enforcement scope — read this before relying on the caps
 
-Full recipient/amount enforcement — spend caps, allowlists, per-transaction limits — is
-native and automatic for SAC token transfers (`transfer`/`transfer_from`), since these are
-the calls whose arguments the Soroban auth context exposes for inspection. For other Soroban
-contract calls made by the guarded account (arbitrary DEX/lending/protocol calls), the
-policy engine enforces the protocol allowlist — the account is default-deny, so every call
-must match an allowlisted contract and, where configured, an allowlisted function — plus
-the active-window, pause, freeze, and dead-man gates. Per-call amount/recipient limits and
-rolling-window spend accounting are not applied to those calls, because the amount is not
-available in the auth context in any trustworthy way. Extending fine-grained enforcement to
-arbitrary calls is tracked as a v2 item, not implied as already covered.
+Full recipient/amount enforcement — spend caps, allowlists, per-transaction limits — is native and automatic for SAC token transfers (`transfer`/`transfer_from`), since these are the calls whose arguments the Soroban auth context exposes for inspection. For other Soroban contract calls made by the guarded account (arbitrary DEX/lending/protocol calls), the policy engine still enforces window and pause state, but per-call amount/recipient limits are not yet enforced — extending fine-grained enforcement to arbitrary calls is tracked as a v2 item, not implied as already covered.
 
-This boundary is an inherent property of the platform (the auth context does not expose
-arbitrary call arguments generically), not a gap this project hides or overclaims. The
-classification that produces this boundary (`AssetTransfer` vs `Protocol` vs `Unknown`
-default-deny) is spelled out in SPEC §6.
+This boundary is an inherent property of the platform (the auth context does not expose arbitrary call arguments generically), not a gap this project hides or overclaims. The classification that produces this boundary (`AssetTransfer` vs `Protocol` vs `Unknown` default-deny) is spelled out in SPEC §6.
 
 ## Quick Start
 
@@ -408,6 +396,42 @@ Instance keys auto-refresh TTL on every invocation; persistent keys are extended
 maximum TTL on every write (`persist_set`). The `Window` ledger is bounded at
 `MAX_WINDOW_ENTRIES = 8192` — beyond that, the two oldest entries merge *forward*
 (conservative over-count), so the `window_cap` ceiling is never exceeded (SPEC §3.1).
+
+## Architecture
+
+Stellar Agent Guard operates across three dedicated repositories:
+
+```
+┌─────────────────────────────────────────────────────────────────────────┐
+│                      Operator (Browser / Freighter)                     │
+│                                     │                                   │
+│                                     ▼                                   │
+│              stellar-agent-guard-dashboard (Next.js / UI)               │
+└─────────────────────────────────────┬───────────────────────────────────┘
+                                      │
+                                      ▼
+┌─────────────────────────────────────────────────────────────────────────┐
+│                   AI Agent Runtime (LangChain / ElizaOS)                │
+│                                     │                                   │
+│                                     ▼                                   │
+│                stellar-agent-guard-sdk (TypeScript / RPC)               │
+│               • Pre-flight policy check  • Cost pre-checks              │
+│               • Agent-auth tx signing    • Event telemetry              │
+└─────────────────────────────────────┬───────────────────────────────────┘
+                                      │
+                                      ▼ Soroban RPC
+┌─────────────────────────────────────────────────────────────────────────┐
+│               stellar-agent-guard-contracts (Soroban / Rust)             │
+│            • CustomAccount interface (`__check_auth`)                   │
+│            • Spend caps, rolling window, allowlists, dead-man switch    │
+└─────────────────────────────────────────────────────────────────────────┘
+```
+
+| Repository | Role | Documentation |
+|---|---|---|
+| [**stellar-agent-guard-contracts**](https://github.com/aigbagbobila/stellar-agent-guard-contracts) (this repo) | Soroban smart contracts implementing Custom Account Abstraction and spending policy firewall | [GitBook Docs](https://soroban-cost-estimator.gitbook.io/stellar-agent-guard-contracts/) |
+| [**stellar-agent-guard-sdk**](https://github.com/aigbagbobila/stellar-agent-guard-sdk) | TypeScript SDK for pre-flight interception, simulation pricing, and AI agent framework integration | [GitHub](https://github.com/aigbagbobila/stellar-agent-guard-sdk) |
+| [**stellar-agent-guard-dashboard**](https://github.com/aigbagbobila/stellar-agent-guard-dashboard) | Client-side operator dashboard for policy deployment, inspection, and emergency panic-button freeze | [GitHub](https://github.com/aigbagbobila/stellar-agent-guard-dashboard) |
 
 ## Repository layout
 
