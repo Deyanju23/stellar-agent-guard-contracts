@@ -31,9 +31,11 @@ before the action can touch a target protocol. `__check_auth` is the single enfo
   of its own), so every action of the account is a Soroban invocation and therefore passes
   through `__check_auth`. There is no classic-op enforcement gap to configure.
 
-### 1.1 SDK surface this is built on (soroban-sdk 27)
+### 1.1 SDK and host surface this is built on (soroban-sdk 27)
 
-Verified against `soroban-sdk 27.0.6` source (`src/auth.rs`, `src/custom_account.rs`):
+Verified against `soroban-sdk 27.0.6` source (`src/auth.rs`, `src/custom_account.rs`). The SDK
+version is pinned in `Cargo.toml`; the host is not a library dependency, so this section also
+records the host contract that the contract depends on:
 
 ```rust
 pub trait CustomAccountInterface {
@@ -65,6 +67,32 @@ Ed25519 key; a `Vec` of keys / threshold signatures is a v2 item). Signature ver
 `env.crypto().ed25519_verify(registered_pubkey, signature_payload (32B), presented_sig)`, then
 policy evaluation. CAP-71 delegation (`env.custom_account().get_delegated_signers()` /
 `delegate_auth`) is available but **out of v1 scope**.
+
+#### Host/protocol compatibility pin
+
+The contract's hermetic tests use the SDK 27.0.6 test host. The live testnet proof is pinned to
+Soroban **protocol 28**; these are separate compatibility anchors, not interchangeable version
+numbers. A host upgrade can change behavior without changing the Rust dependency, so upgrades to
+protocol 28+ are watched by the weekly Futurenet workflow in `.github/workflows/host-watch.yml`.
+
+#### Host behaviors depended upon
+
+- **Context construction.** For an authorized contract call, the host supplies
+  `Context::Contract(ContractContext { contract, fn_name, args })`; the target contract,
+  function name, and raw argument vector must be preserved for the engine's allowlist and SAC
+  transfer parsing. Account-authorized contract creation must remain represented by the host
+  function context variants and remain default-deny.
+- **Auth payload digest.** `signature_payload` is the exact 32-byte hash of the
+  `HashIdPreimage::SorobanAuthorization` value covering the authorization entry. The host must
+  not rehash, normalize, or substitute the bytes between constructing that digest and calling
+  `__check_auth`; the agent signature is verified against these bytes unchanged.
+- **Custom-account dispatch.** The host must recognize the account address as a custom account
+  and route every authorization required by that account through `__check_auth`, including
+  self-calls such as `heartbeat`. A host change that skips, duplicates, or changes the dispatch
+  would weaken the single enforcement vector, even if the contract ABI still compiles.
+- **Host version and protocol reporting.** The Futurenet watch verifies that the endpoint is the
+  expected Futurenet network and reports a Soroban protocol of at least 28. This is a visible
+  compatibility signal, not a claim that every future host release is supported.
 
 ---
 
