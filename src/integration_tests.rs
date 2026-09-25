@@ -33,16 +33,17 @@ use soroban_sdk::{contract, contractimpl, Address, BytesN, Env, FromVal, IntoVal
 
 const SIG_EXPIRATION_LEDGER: u32 = 6_000_000;
 
-/// A `ScVal::Symbol` built from a plain string (event names / map keys).
-fn symbol_val(s: &str) -> ScVal {
-    ScVal::Symbol(ScSymbol::try_from(std::vec::Vec::from(s)).unwrap())
-}
-
-/// Off-chain reproduction of the contract's key fingerprint (SPEC §9):
-/// `sha256(pubkey)[0..8]`, as the `ScVal::Bytes` an event data map carries.
-fn fingerprint(pubkey: &[u8; 32]) -> ScVal {
-    let digest = Sha256::digest(pubkey);
-    ScVal::Bytes(ScBytes::try_from(digest[..8].to_vec()).unwrap())
+/// Number of `heartbeat` events published by the last contract invocation.
+fn heartbeat_event_count(env: &Env) -> usize {
+    let want = ScVal::Symbol(ScSymbol::try_from(std::vec::Vec::from("event_heartbeat")).unwrap());
+    env.events()
+        .all()
+        .events()
+        .iter()
+        .filter(|e| {
+            matches!(&e.body, xdr::ContractEventBody::V0(v0) if v0.topics.first() == Some(&want))
+        })
+        .count()
 }
 
 // ── Test contracts ───────────────────────────────────────────────────────
@@ -370,6 +371,7 @@ fn lifecycle_initialize_once_then_status() {
 
     let st = client.status();
     assert!(!st.has_policy);
+    assert_eq!(st.policy_revision, 0);
     assert!(!st.admin_frozen);
     assert!(!st.heartbeat_expired);
     assert_eq!(st.now, 0);
@@ -385,6 +387,34 @@ fn allowed_transaction_succeeds() {
     assert!(h.emitted_allowed_auth());
     let st = h.status();
     assert!(!st.heartbeat_expired);
+}
+
+#[test]
+fn policy_revision_increments_across_set_and_revoke() {
+    let h = Harness::new();
+    let client = PolicyEngineClient::new(&h.env, &h.guard);
+
+    // 0 pre-first-set
+    let mut st = client.status();
+    assert_eq!(st.policy_revision, 0);
+
+    // 1 after set
+    h.env.mock_all_auths();
+    client.set_policy(&h.base_policy());
+    st = client.status();
+    assert_eq!(st.policy_revision, 1);
+
+    // 2 after revoke
+    h.env.mock_all_auths();
+    client.revoke_policy();
+    st = client.status();
+    assert_eq!(st.policy_revision, 2);
+
+    // 3 after second set
+    h.env.mock_all_auths();
+    client.set_policy(&h.base_policy());
+    st = client.status();
+    assert_eq!(st.policy_revision, 3);
 }
 
 #[test]
@@ -601,6 +631,52 @@ fn rotated_agent_key_binds() {
     // Swap the harness agent to the new key and confirm it works.
     h.agent = new_key;
     h.transfer(&recv, 5);
+}
+
+#[test]
+fn redundant_same_second_heartbeat_is_a_measured_no_op() {
+    // No policy/initialize needed: `heartbeat` itself only touches
+    // `LastHeartbeat`; the policy gates live in `__check_auth`, which mock auth
+    // bypasses. This isolates the storage-write path the optimization targets.
+    let env = Env::default();
+    env.mock_all_auths();
+    let guard = env.register(PolicyEngine, ());
+    let client = PolicyEngineClient::new(&env, &guard);
+    env.ledger().set_timestamp(1_000);
+
+    // First heartbeat of the second: a real write + one event.
+    client.heartbeat();
+    let fresh_cpu = env.cost_estimate().budget().cpu_instruction_cost();
+    assert_eq!(
+        heartbeat_event_count(&env),
+        1,
+        "fresh heartbeat writes + emits"
+    );
+
+    // Second heartbeat in the same ledger second: skipped entirely.
+    client.heartbeat();
+    let redundant_cpu = env.cost_estimate().budget().cpu_instruction_cost();
+    assert_eq!(
+        heartbeat_event_count(&env),
+        0,
+        "the no-op heartbeat must not emit"
+    );
+
+    std::println!(
+        "heartbeat cpu instructions: fresh={fresh_cpu} redundant_same_second={redundant_cpu}\
+         saved={}",
+        fresh_cpu.saturating_sub(redundant_cpu)
+    );
+    assert!(
+        redundant_cpu < fresh_cpu,
+        "skipping the redundant write must cost less (fresh={fresh_cpu}, \
+         redundant={redundant_cpu})"
+    );
+
+    // Behaviour matches a write: `LastHeartbeat` is still `now`.
+    let st = client.status();
+    assert_eq!(st.last_heartbeat, 1_000);
+    assert_eq!(st.now, 1_000);
 }
 
 #[test]
