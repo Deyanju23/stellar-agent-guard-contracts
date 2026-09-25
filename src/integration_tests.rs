@@ -33,6 +33,18 @@ use soroban_sdk::{contract, contractimpl, Address, BytesN, Env, FromVal, IntoVal
 
 const SIG_EXPIRATION_LEDGER: u32 = 6_000_000;
 
+/// A `ScVal::Symbol` built from a plain string (event names / map keys).
+fn symbol_val(s: &str) -> ScVal {
+    ScVal::Symbol(ScSymbol::try_from(std::vec::Vec::from(s)).unwrap())
+}
+
+/// Off-chain reproduction of the contract's key fingerprint (SPEC §9):
+/// `sha256(pubkey)[0..8]`, as the `ScVal::Bytes` an event data map carries.
+fn fingerprint(pubkey: &[u8; 32]) -> ScVal {
+    let digest = Sha256::digest(pubkey);
+    ScVal::Bytes(ScBytes::try_from(digest[..8].to_vec()).unwrap())
+}
+
 /// Number of `heartbeat` events published by the last contract invocation.
 fn heartbeat_event_count(env: &Env) -> usize {
     let want = ScVal::Symbol(ScSymbol::try_from(std::vec::Vec::from("event_heartbeat")).unwrap());
