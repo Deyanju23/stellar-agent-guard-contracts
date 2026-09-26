@@ -31,9 +31,11 @@ before the action can touch a target protocol. `__check_auth` is the single enfo
   of its own), so every action of the account is a Soroban invocation and therefore passes
   through `__check_auth`. There is no classic-op enforcement gap to configure.
 
-### 1.1 SDK surface this is built on (soroban-sdk 27)
+### 1.1 SDK and host surface this is built on (soroban-sdk 27)
 
-Verified against `soroban-sdk 27.0.6` source (`src/auth.rs`, `src/custom_account.rs`):
+Verified against `soroban-sdk 27.0.6` source (`src/auth.rs`, `src/custom_account.rs`). The SDK
+version is pinned in `Cargo.toml`; the host is not a library dependency, so this section also
+records the host contract that the contract depends on:
 
 ```rust
 pub trait CustomAccountInterface {
